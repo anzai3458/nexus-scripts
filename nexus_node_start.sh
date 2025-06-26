@@ -4,6 +4,35 @@
 # This script manages multiple Nexus network nodes with different node IDs
 # Usage: ./nexus_node_start.sh [start|stop|status|log] [node_id]
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_color() {
+    local color=$1
+    local message=$2
+    echo -e "${color}${message}${NC}"
+}
+
+# Function to check if the nexus-network command is installed
+check_nexus_network_installed() {
+    if ! command -v nexus-network &> /dev/null; then
+        print_color $RED "Error: nexus-network command not found"
+        print_color $BLUE "Please install the Nexus Network CLI by running:"
+        print_color $YELLOW "curl https://cli.nexus.xyz/ | sh"
+        print_color $BLUE "After installation, restart or refresh your terminal:"
+        print_color $YELLOW "source ~/.bashrc  # For Bash"
+        print_color $YELLOW "source ~/.zshrc   # For Zsh"
+        print_color $BLUE "Or open a new terminal window"
+        print_color $BLUE "Then try running this script again"
+        exit 1
+    fi
+}
+
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR="$SCRIPT_DIR/run"
@@ -12,6 +41,7 @@ PID_FILE="$RUN_DIR/nexus_nodes.pids"
 MONITOR_PID_FILE="$RUN_DIR/nexus_monitor.pid"
 RESTART_LOG_FILE="$RUN_DIR/nexus_restart.log"
 MONITOR_LOG_FILE="$RUN_DIR/nexus_monitor.log"
+MONITORED_NODES_FILE="$RUN_DIR/monitored_nodes.list"
 LOG_DIR="$SCRIPT_DIR/logs"
 
 # Load configuration from file
@@ -37,46 +67,38 @@ load_config() {
     LOG_RESTART_ACTIONS=${LOG_RESTART_ACTIONS:-true}
 }
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_color() {
-    local color=$1
-    local message=$2
-    echo -e "${color}${message}${NC}"
-}
-
 # Function to show usage
 show_usage() {
     echo "Usage: $0 [COMMAND] [OPTIONS]"
     echo ""
     echo "Commands:"
-    echo "  start [node_id]    Start all nodes or specific node"
-    echo "  stop [node_id]     Stop all nodes or specific node"
-    echo "  status [node_id]   Show status of all nodes or specific node"
-    echo "  log [node_id]      Show logs for all nodes or specific node"
-    echo "  rates [node_id]    Show error/success rates for last 5 minutes"
-    echo "  restart [node_id]  Restart all nodes or specific node"
-    echo "  monitor start      Start monitoring daemon"
-    echo "  monitor stop       Stop monitoring daemon"
-    echo "  monitor status     Show monitoring daemon status"
-    echo "  monitor log        Show monitor daemon logs"
+    echo "  start [node_id]       Start all nodes or specific node"
+    echo "  stop [node_id]        Stop all nodes or specific node"
+    echo "  status [node_id]      Show status of all nodes or specific node"
+    echo "  log [node_id]         Show logs for all nodes or specific node"
+    echo "  rates [node_id]       Show error/success rates for last 5 minutes"
+    echo "  restart [node_id]     Restart all nodes or specific node"
+    echo ""
+    echo "Monitor Commands:"
+    echo "  monitor start         Start monitoring daemon"
+    echo "  monitor start --force Start monitor even if no nodes are running"
+    echo "  monitor stop          Stop monitoring daemon"
+    echo "  monitor status        Show monitoring daemon status"
+    echo "  monitor log           Show monitor daemon logs"
+    echo "  monitor add NODE_ID   Add a node to monitoring list"
+    echo "  monitor remove NODE_ID Remove a node from monitoring list"
     echo ""
     echo "Examples:"
-    echo "  $0 start           # Start all nodes"
-    echo "  $0 start 6515746   # Start specific node"
-    echo "  $0 status          # Show status of all nodes"
-    echo "  $0 stop            # Stop all nodes"
-    echo "  $0 log 6515746     # Show logs for specific node"
-    echo "  $0 rates           # Show error/success rates for all nodes"
-    echo "  $0 rates 6515746   # Show rates for specific node"
-    echo "  $0 monitor start   # Start auto-restart monitoring"
-    echo "  $0 monitor status  # Check monitoring daemon status"
+    echo "  $0 start              # Start all nodes"
+    echo "  $0 start 6515746      # Start specific node"
+    echo "  $0 status             # Show status of all nodes"
+    echo "  $0 stop               # Stop all nodes"
+    echo "  $0 log 6515746        # Show logs for specific node"
+    echo "  $0 rates              # Show error/success rates for all nodes"
+    echo "  $0 rates 6515746      # Show rates for specific node"
+    echo "  $0 monitor start      # Start auto-restart monitoring"
+    echo "  $0 monitor status     # Check monitoring daemon status"
+    echo "  $0 monitor add 6515746 # Add node to monitoring list"
 }
 
 # Function to ensure log directory exists
@@ -97,6 +119,7 @@ ensure_run_dir() {
 start_node() {
     local node_id=$1
     local log_file="$LOG_DIR/nexus_node_${node_id}.log"
+    local auto_monitor=${2:-true}  # Default to adding to monitor if it's running
     
     # Check if node is already running
     if is_node_running "$node_id"; then
@@ -129,6 +152,17 @@ start_node() {
         echo "$pid:$node_id" >> "$PID_FILE"
         print_color $GREEN "Node $node_id started successfully with PID: $pid"
         print_color $BLUE "Log file: $log_file"
+        
+        # Add to monitored nodes list if monitor is running
+        if [ "$auto_monitor" = true ] && [ -f "$MONITOR_PID_FILE" ]; then
+            local monitor_pid=$(cat "$MONITOR_PID_FILE")
+            if kill -0 "$monitor_pid" 2>/dev/null; then
+                if add_node_to_monitor "$node_id"; then
+                    print_color $BLUE "Added node $node_id to monitored nodes list"
+                fi
+            fi
+        fi
+        
         return 0
     else
         print_color $RED "Failed to start node $node_id"
@@ -168,6 +202,16 @@ get_node_pid() {
 stop_node() {
     local node_id=$1
     local pid=$(get_node_pid "$node_id")
+    
+    # Remove from monitored nodes list if monitor is running
+    if [ -f "$MONITOR_PID_FILE" ]; then
+        local monitor_pid=$(cat "$MONITOR_PID_FILE")
+        if kill -0 "$monitor_pid" 2>/dev/null; then
+            if remove_node_from_monitor "$node_id"; then
+                print_color $BLUE "Removed node $node_id from monitored nodes list"
+            fi
+        fi
+    fi
     
     if [ -z "$pid" ]; then
         print_color $YELLOW "Node $node_id is not running or not found in PID file"
@@ -571,12 +615,89 @@ log_monitor_event() {
     fi
 }
 
+# Function to check if node is being monitored
+is_node_monitored() {
+    local node_id=$1
+    
+    if [ ! -f "$MONITORED_NODES_FILE" ]; then
+        return 1  # No monitored nodes list exists
+    fi
+    
+    grep -q "^$node_id$" "$MONITORED_NODES_FILE" 2>/dev/null
+    return $?
+}
+
+# Function to add node to monitored list
+add_node_to_monitor() {
+    local node_id=$1
+    
+    ensure_run_dir
+    
+    # Create file if it doesn't exist
+    if [ ! -f "$MONITORED_NODES_FILE" ]; then
+        touch "$MONITORED_NODES_FILE"
+    fi
+    
+    # Only add if not already there
+    if ! is_node_monitored "$node_id"; then
+        echo "$node_id" >> "$MONITORED_NODES_FILE"
+        if [ -f "$MONITOR_LOG_FILE" ]; then
+            log_monitor_event "Added node $node_id to monitoring list"
+        fi
+        return 0
+    fi
+    
+    return 1  # Already monitored
+}
+
+# Function to remove node from monitored list
+remove_node_from_monitor() {
+    local node_id=$1
+    
+    if [ ! -f "$MONITORED_NODES_FILE" ]; then
+        return 1  # No monitored nodes list exists
+    fi
+    
+    if is_node_monitored "$node_id"; then
+        grep -v "^$node_id$" "$MONITORED_NODES_FILE" > "${MONITORED_NODES_FILE}.tmp"
+        mv "${MONITORED_NODES_FILE}.tmp" "$MONITORED_NODES_FILE"
+        if [ -f "$MONITOR_LOG_FILE" ]; then
+            log_monitor_event "Removed node $node_id from monitoring list"
+        fi
+        return 0
+    fi
+    
+    return 1  # Not monitored
+}
+
 # Function to monitor and restart nodes
 monitor_nodes() {
     log_monitor_event "Monitor daemon started"
     
     while true; do
-        for node_id in "${NODE_IDS[@]}"; do
+        # Read the current list of monitored nodes
+        if [ ! -f "$MONITORED_NODES_FILE" ]; then
+            # No nodes to monitor
+            log_monitor_event "No nodes in monitoring list - waiting for nodes to be added"
+            sleep "$MONITOR_INTERVAL"
+            continue
+        fi
+        
+        # Read monitored nodes into an array
+        local monitored_nodes=()
+        while read -r node_id; do
+            monitored_nodes+=("$node_id")
+        done < "$MONITORED_NODES_FILE"
+        
+        # Check if we have any nodes to monitor
+        if [ ${#monitored_nodes[@]} -eq 0 ]; then
+            # Empty monitoring list
+            sleep "$MONITOR_INTERVAL"
+            continue
+        fi
+        
+        # Process each monitored node
+        for node_id in "${monitored_nodes[@]}"; do
             if ! is_node_running "$node_id"; then
                 if can_restart_node "$node_id"; then
                     log_monitor_event "Node $node_id is not running - attempting restart"
@@ -619,7 +740,7 @@ monitor_nodes() {
         
         # Log a heartbeat every 10 monitoring intervals
         if [ $(( SECONDS % (MONITOR_INTERVAL * 10) )) -lt "$MONITOR_INTERVAL" ]; then
-            log_monitor_event "Monitor heartbeat - all nodes checked"
+            log_monitor_event "Monitor heartbeat - monitoring ${#monitored_nodes[@]} nodes"
         fi
         
         sleep "$MONITOR_INTERVAL"
@@ -656,12 +777,40 @@ start_monitor() {
         fi
     fi
     
+    # Create a list of currently running nodes to monitor
+    > "$MONITORED_NODES_FILE"
+    local running_nodes=()
+    for node_id in "${NODE_IDS[@]}"; do
+        if is_node_running "$node_id"; then
+            echo "$node_id" >> "$MONITORED_NODES_FILE"
+            running_nodes+=("$node_id")
+        fi
+    done
+    
+    # Count how many nodes we're monitoring
+    local nodes_count=${#running_nodes[@]}
+    
+    if [ $nodes_count -eq 0 ]; then
+        print_color $YELLOW "Warning: No running nodes found to monitor"
+        print_color $BLUE "Start nodes first using '$0 start' before starting the monitor"
+        print_color $BLUE "Or use '$0 monitor --all' to monitor all nodes even if not running"
+        if [ "$2" != "--force" ]; then
+            print_color $YELLOW "Monitor not started. Use '$0 monitor start --force' to start anyway"
+            return 1
+        fi
+        print_color $YELLOW "Starting monitor anyway with --force option"
+    fi
+    
     # Create a new log file with header
     echo "===== Nexus Network Monitor Log - Started $(date) =====" > "$MONITOR_LOG_FILE"
     echo "Monitor interval: ${MONITOR_INTERVAL}s" >> "$MONITOR_LOG_FILE"
     echo "Success rate threshold: ${SUCCESS_RATE_THRESHOLD}%" >> "$MONITOR_LOG_FILE"
     echo "Restart cooldown: ${RESTART_COOLDOWN}s" >> "$MONITOR_LOG_FILE"
-    echo "Monitoring nodes: ${NODE_IDS[*]}" >> "$MONITOR_LOG_FILE"
+    if [ $nodes_count -gt 0 ]; then
+        echo "Monitoring nodes: ${running_nodes[*]}" >> "$MONITOR_LOG_FILE"
+    else
+        echo "Monitoring nodes: None running at start time" >> "$MONITOR_LOG_FILE"
+    fi
     echo "=======================================================" >> "$MONITOR_LOG_FILE"
     echo "" >> "$MONITOR_LOG_FILE"
     
@@ -669,6 +818,12 @@ start_monitor() {
     print_color $BLUE "Monitor interval: ${MONITOR_INTERVAL}s"
     print_color $BLUE "Success rate threshold: ${SUCCESS_RATE_THRESHOLD}%"
     print_color $BLUE "Restart cooldown: ${RESTART_COOLDOWN}s"
+    
+    if [ $nodes_count -gt 0 ]; then
+        print_color $BLUE "Monitoring nodes: ${running_nodes[*]}"
+    else
+        print_color $YELLOW "No running nodes to monitor"
+    fi
     
     # Start monitor as background process
     monitor_nodes &
@@ -731,6 +886,24 @@ show_monitor_status() {
     echo "  Restart cooldown: ${RESTART_COOLDOWN}s"
     echo "  Min log entries: $MIN_LOG_ENTRIES"
     
+    # Show monitored nodes
+    echo ""
+    echo "Monitored Nodes:"
+    if [ -f "$MONITORED_NODES_FILE" ] && [ -s "$MONITORED_NODES_FILE" ]; then
+        local monitored=()
+        while read -r node_id; do
+            if is_node_running "$node_id"; then
+                monitored+=("$node_id (RUNNING)")
+            else
+                monitored+=("$node_id (STOPPED)")
+            fi
+        done < "$MONITORED_NODES_FILE"
+        
+        printf "  %s\n" "${monitored[@]}"
+    else
+        echo "  None"
+    fi
+    
     if [ -f "$RESTART_LOG_FILE" ]; then
         echo ""
         echo "Recent restart actions:"
@@ -772,6 +945,13 @@ load_config
 # Main execution logic
 COMMAND=${1:-"help"}
 NODE_ID=$2
+
+# Check if nexus-network command is installed before executing relevant commands
+case "$COMMAND" in
+    "start"|"stop"|"restart")
+        check_nexus_network_installed
+        ;;
+esac
 
 case "$COMMAND" in
     "start")
@@ -896,9 +1076,37 @@ case "$COMMAND" in
                     print_color $BLUE "Expected location: $MONITOR_LOG_FILE"
                 fi
                 ;;
+            "add")
+                if [ -n "$NODE_ID" ]; then
+                    if [[ " ${NODE_IDS[@]} " =~ " ${NODE_ID} " ]]; then
+                        add_node_to_monitor "$NODE_ID"
+                    else
+                        print_color $RED "Error: Invalid node ID '$NODE_ID'"
+                        print_color $BLUE "Available node IDs: ${NODE_IDS[*]}"
+                        exit 1
+                    fi
+                else
+                    print_color $RED "Error: Missing node ID for 'monitor add'"
+                    exit 1
+                fi
+                ;;
+            "remove")
+                if [ -n "$NODE_ID" ]; then
+                    if [[ " ${NODE_IDS[@]} " =~ " ${NODE_ID} " ]]; then
+                        remove_node_from_monitor "$NODE_ID"
+                    else
+                        print_color $RED "Error: Invalid node ID '$NODE_ID'"
+                        print_color $BLUE "Available node IDs: ${NODE_IDS[*]}"
+                        exit 1
+                    fi
+                else
+                    print_color $RED "Error: Missing node ID for 'monitor remove'"
+                    exit 1
+                fi
+                ;;
             *)
                 print_color $RED "Error: Invalid monitor command '$NODE_ID'"
-                print_color $BLUE "Available monitor commands: start, stop, status, log"
+                print_color $BLUE "Available monitor commands: start, stop, status, log, add, remove"
                 exit 1
                 ;;
         esac

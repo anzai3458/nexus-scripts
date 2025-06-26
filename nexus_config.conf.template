@@ -21,7 +21,7 @@ MAX_LOG_FILES=2
 MONITOR_ENABLED=true
 MONITOR_INTERVAL=30          # Monitoring interval in seconds (30s, 60s, etc.)
 SUCCESS_RATE_THRESHOLD=50    # Minimum success rate % before auto-restart
-MIN_LOG_ENTRIES=20           # Minimum log entries needed for rate calculation
+MIN_LOG_ENTRIES=100          # Minimum log entries needed for rate calculation
 RESTART_COOLDOWN=300         # Cooldown period in seconds before allowing another restart
 
 # Notification settings
