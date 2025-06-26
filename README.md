@@ -1,8 +1,8 @@
-# Nexus Network Node Manager
+# 🚀 Nexus Network Node Manager
 
 A bash script to manage multiple Nexus network nodes with different node IDs.
 
-## Features
+## ✨ Features
 
 - Start, stop, and monitor multiple Nexus nodes
 - View real-time logs and status
@@ -12,7 +12,7 @@ A bash script to manage multiple Nexus network nodes with different node IDs.
 - Detailed monitoring with configurable parameters
 - Automatic dependency check for Nexus Network CLI
 
-## System Architecture
+## 🏗️ System Architecture
 
 ```mermaid
 graph TD
@@ -62,21 +62,22 @@ graph TD
     M3 -.Restarts.-> N3
 ```
 
-## Quick Start
+## 🏁 Quick Start
 
-1. Clone this repository
-2. Create a configuration file (see below)
-3. Install Nexus Network CLI: `curl https://cli.nexus.xyz/ | sh`
-4. Start your nodes: `./nexus_node_start.sh start`
-5. Check status: `./nexus_node_start.sh status`
-6. Start monitoring: `./nexus_node_start.sh monitor start`
+1. Clone this repository: `git clone https://github.com/anzai3458/nexus-scripts.git`
+2. Copy the config template: `cp nexus_config.conf.template nexus_config.conf`
+3. Edit the config file and update your node IDs: `nano nexus_config.conf` 
+4. Install Nexus Network CLI: `curl https://cli.nexus.xyz/ | sh`
+5. Start your nodes: `./nexus_node_start.sh start`
+6. Check status: `./nexus_node_start.sh status`
+7. Start monitoring: `./nexus_node_start.sh monitor start`
 
-## Installation
+## 📦 Installation
 
 1. Download the script:
    ```bash
-   git clone https://github.com/yourusername/nexus-network-manager.git
-   cd nexus-network-manager
+   git clone https://github.com/anzai3458/nexus-scripts.git
+   cd nexus-scripts
    chmod +x nexus_node_start.sh
    ```
 
@@ -98,31 +99,24 @@ graph TD
    
    Note: The script will automatically check if the CLI is installed and prompt you to install it if it's not.
 
-3. Create a configuration file named `nexus_config.conf` in the same directory:
+3. Create your configuration file from the template:
    ```bash
-   # Create configuration file with example settings
-   cat > nexus_config.conf << 'EOL'
-   # List of node IDs to manage
+   # Copy the template 
+   cp nexus_config.conf.template nexus_config.conf
+   
+   # Edit the configuration file and update your node IDs
+   nano nexus_config.conf
+   ```
+   
+   Make sure to update the NODE_IDS array with your actual node IDs:
+   ```bash
+   # List of node IDs to manage - REPLACE THESE with your actual node IDs
    NODE_IDS=(6515746 6515747 6515748)
-
-   # Log rotation settings
-   MAX_LOG_SIZE_MB=25
-   MAX_LOG_FILES=3
-
-   # Monitor settings
-   MONITOR_ENABLED=true
-   MONITOR_INTERVAL=30  # seconds
-   SUCCESS_RATE_THRESHOLD=60  # percentage
-   MIN_LOG_ENTRIES=20
-   RESTART_COOLDOWN=300  # seconds
-   ENABLE_NOTIFICATIONS=true
-   LOG_RESTART_ACTIONS=true
-   EOL
    ```
 
 4. Make sure you have the `nexus-network` command in your PATH
 
-## Configuration
+## ⚙️ Configuration
 
 Edit the `nexus_config.conf` file to customize your settings:
 
@@ -139,11 +133,11 @@ Edit the `nexus_config.conf` file to customize your settings:
 | `ENABLE_NOTIFICATIONS` | Show notifications when monitor takes action | true |
 | `LOG_RESTART_ACTIONS` | Log all restart actions | true |
 
-## Example Workflow
+## 📋 Example Workflow
 
 Here's a typical workflow for managing your Nexus nodes:
 
-### Initial Setup
+### 🚀 Initial Setup
 
 ```bash
 # Create required directories
@@ -163,7 +157,7 @@ mkdir -p logs run
 ./nexus_node_start.sh monitor status
 ```
 
-### Daily Operations
+### 📊 Daily Operations
 
 ```bash
 # Check node status each morning
@@ -179,7 +173,7 @@ cat run/nexus_restart.log
 ./nexus_node_start.sh monitor status
 ```
 
-### Maintenance
+### 🧰 Maintenance
 
 ```bash
 # To restart a specific node for maintenance
@@ -196,9 +190,9 @@ cat run/nexus_restart.log
 ./nexus_node_start.sh start
 ```
 
-## Usage
+## 🛠️ Usage
 
-### Basic Commands
+### 📟 Basic Commands
 
 ```bash
 # Start all nodes
@@ -229,7 +223,7 @@ cat run/nexus_restart.log
 ./nexus_node_start.sh restart
 ```
 
-### Monitoring Commands
+### 📊 Monitoring Commands
 
 ```bash
 # Start monitoring daemon
@@ -254,14 +248,14 @@ cat run/nexus_restart.log
 ./nexus_node_start.sh monitor remove 6515746
 ```
 
-## Monitoring System
+## 🔍 Monitoring System
 
 The monitoring system tracks node health and can automatically restart nodes if:
 
 1. A node process stops running
 2. A node's success rate falls below the configured threshold
 
-### How Monitoring Works
+### 🤖 How Monitoring Works
 
 1. Only monitors nodes that are running when the monitor starts (or manually added)
 2. Calculates success/error rates from recent log entries
@@ -269,22 +263,22 @@ The monitoring system tracks node health and can automatically restart nodes if:
 4. Applies a cooldown period to prevent excessive restarts
 5. Maintains separate logs for monitor events and restart actions
 
-### Log Files
+### 📁 Log Files
 
 - Node logs: `logs/nexus_node_<node_id>.log`
 - Monitor log: `run/nexus_monitor.log`
 - Restart log: `run/nexus_restart.log`
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
-### Node won't start
+### 🚫 Node won't start
 
 Check the node's log file for errors:
 ```bash
 cat logs/nexus_node_<node_id>.log
 ```
 
-### Monitor not restarting failed nodes
+### 🚨 Monitor not restarting failed nodes
 
 1. Check if the node is in the monitored nodes list:
    ```bash
@@ -301,7 +295,7 @@ cat logs/nexus_node_<node_id>.log
    ./nexus_node_start.sh monitor status
    ```
 
-### Managing Stale PIDs
+### 👻 Managing Stale PIDs
 
 If the script reports a node is running but it's not:
 ```bash
@@ -312,19 +306,19 @@ If the script reports a node is running but it's not:
 ./nexus_node_start.sh start <node_id>
 ```
 
-## License
+## 📜 License
 
 [Specify your license here]
 
-## Conclusion
+## 🎯 Conclusion
 
 The Nexus Network Node Manager is designed to simplify the operation and maintenance of multiple Nexus network nodes. With its automated monitoring and restart capabilities, you can ensure maximum uptime for your nodes while minimizing manual intervention.
 
 Key benefits:
-- Simplifies managing multiple nodes from a single interface
-- Provides detailed error and success rate analytics
-- Automatically recovers from failures
-- Maintains comprehensive logs for troubleshooting
-- Flexible configuration to meet your specific needs
+- 🚀 Simplifies managing multiple nodes from a single interface
+- 📈 Provides detailed error and success rate analytics
+- 🛠️ Automatically recovers from failures
+- 📊 Maintains comprehensive logs for troubleshooting
+- ⚙️ Flexible configuration to meet your specific needs
 
-For questions, issues, or contributions, please open a GitHub issue or submit a pull request. 
+For questions, issues, or contributions, please open a GitHub issue or submit a pull request. Happy node running! 😄 
