@@ -1,0 +1,29 @@
+# Nexus Network Node Manager Configuration
+# This file contains configuration settings for the node manager script
+
+# Node IDs to manage (one per line, no quotes needed)
+NODE_IDS=(
+    6515746  # replace these with your node IDs
+    6516225
+    6636379
+    6695806
+    6696334
+    6875525
+    6975160
+    7026280
+)
+
+# Log rolling configuration
+MAX_LOG_SIZE_MB=25
+MAX_LOG_FILES=2
+
+# Monitoring daemon configuration
+MONITOR_ENABLED=true
+MONITOR_INTERVAL=30          # Monitoring interval in seconds (30s, 60s, etc.)
+SUCCESS_RATE_THRESHOLD=50    # Minimum success rate % before auto-restart
+MIN_LOG_ENTRIES=20           # Minimum log entries needed for rate calculation
+RESTART_COOLDOWN=300         # Cooldown period in seconds before allowing another restart
+
+# Notification settings
+ENABLE_NOTIFICATIONS=true
+LOG_RESTART_ACTIONS=true

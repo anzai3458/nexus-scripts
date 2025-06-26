@@ -1,0 +1,18 @@
+# Ignore logs directory and all its contents
+logs/
+*.log
+
+# Ignore run directory and all its contents
+run/
+*.pids
+
+# Ignore config file that might contain sensitive information
+nexus_config.conf
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Node.js dependencies (if applicable)
+node_modules/
+package-lock.json 
