@@ -19,10 +19,12 @@ MAX_LOG_FILES=2
 
 # Monitoring daemon configuration
 MONITOR_ENABLED=true
-MONITOR_INTERVAL=30          # Monitoring interval in seconds (30s, 60s, etc.)
+MONITOR_INTERVAL=60          # Monitoring interval in seconds (30s, 60s, etc.)
 SUCCESS_RATE_THRESHOLD=50    # Minimum success rate % before auto-restart
-MIN_LOG_ENTRIES=100          # Minimum log entries needed for rate calculation
+MIN_LOG_ENTRIES=20           # Minimum log entries needed for rate calculation
 RESTART_COOLDOWN=300         # Cooldown period in seconds before allowing another restart
+RATE_CALCULATION_MINUTES=5   # Time window in minutes for rate calculation
+INACTIVITY_THRESHOLD=300     # Seconds of inactivity before considering a node as hanging
 
 # Notification settings
 ENABLE_NOTIFICATIONS=true

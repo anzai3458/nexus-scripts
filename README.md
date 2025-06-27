@@ -7,7 +7,8 @@ A bash script to manage multiple Nexus network nodes with different node IDs.
 - Start, stop, and monitor multiple Nexus nodes
 - View real-time logs and status
 - Auto-restart nodes on failure
-- Monitor success/error rates
+- Time-based success/error rate calculation (5-minute window)
+- Process hang detection with automatic recovery
 - Log rotation to prevent disk space issues
 - Detailed monitoring with configurable parameters
 - Automatic dependency check for Nexus Network CLI
@@ -34,6 +35,7 @@ graph TD
         M1[Monitor Daemon]
         M2[Success Rate Analysis]
         M3[Auto-Restart]
+        M4[Hang Detection]
     end
 
     subgraph "Log Files"
@@ -48,7 +50,9 @@ graph TD
     
     F --> M1
     M1 --> M2
+    M1 --> M4
     M2 --> M3
+    M4 --> M3
     
     N1 --> L1
     N2 --> L1
@@ -130,6 +134,8 @@ Edit the `nexus_config.conf` file to customize your settings:
 | `SUCCESS_RATE_THRESHOLD` | Minimum success rate percentage | 60 |
 | `MIN_LOG_ENTRIES` | Minimum log entries for rate calculation | 20 |
 | `RESTART_COOLDOWN` | Seconds to wait before restarting same node | 300 |
+| `RATE_CALCULATION_MINUTES` | Time window in minutes for rate calculation | 5 |
+| `INACTIVITY_THRESHOLD` | Seconds of inactivity before considering a node as hanging | 300 |
 | `ENABLE_NOTIFICATIONS` | Show notifications when monitor takes action | true |
 | `LOG_RESTART_ACTIONS` | Log all restart actions | true |
 
@@ -152,6 +158,9 @@ mkdir -p logs run
 
 # Start monitoring (only running nodes will be monitored)
 ./nexus_node_start.sh monitor start
+
+# Or start monitoring and auto-start all nodes even if not running
+./nexus_node_start.sh monitor start --force
 
 # Check monitor status to see which nodes are being monitored
 ./nexus_node_start.sh monitor status
@@ -230,6 +239,7 @@ cat run/nexus_restart.log
 ./nexus_node_start.sh monitor start
 
 # Force start monitoring even if no nodes are running
+# This will also auto-start all configured nodes
 ./nexus_node_start.sh monitor start --force
 
 # Check monitoring status
@@ -254,14 +264,31 @@ The monitoring system tracks node health and can automatically restart nodes if:
 
 1. A node process stops running
 2. A node's success rate falls below the configured threshold
+3. A node appears to be hanging (no log output for 5 minutes)
 
 ### 🤖 How Monitoring Works
 
 1. Only monitors nodes that are running when the monitor starts (or manually added)
-2. Calculates success/error rates from recent log entries
-3. Restarts nodes that fail or have low success rates
-4. Applies a cooldown period to prevent excessive restarts
-5. Maintains separate logs for monitor events and restart actions
+2. Calculates success/error rates from log entries within the last 5 minutes
+3. Detects hanging processes by monitoring the timestamp of the last log entry
+4. Restarts nodes that fail, hang, or have low success rates
+5. Applies a cooldown period to prevent excessive restarts
+6. Maintains separate logs for monitor events and restart actions
+
+### 📊 Rate Calculation
+
+The success/error rates are calculated based on:
+- Log entries from the past 5 minutes only (time-based window)
+- Entries with timestamps outside this window are ignored
+- Each entry is categorized as Success, Error, or Refresh
+- Success rate = (Success entries / Total entries) × 100%
+
+### 🕒 Process Hang Detection
+
+A node is considered "hanging" when:
+- No new log entries have been generated in the past 5 minutes
+- The node process is still running but not producing output
+- The monitor will automatically restart hanging nodes to recover them
 
 ### 📁 Log Files
 
@@ -308,7 +335,7 @@ If the script reports a node is running but it's not:
 
 ## 📜 License
 
-[Specify your license here]
+MIT License
 
 ## 🎯 Conclusion
 
@@ -317,7 +344,7 @@ The Nexus Network Node Manager is designed to simplify the operation and mainten
 Key benefits:
 - 🚀 Simplifies managing multiple nodes from a single interface
 - 📈 Provides detailed error and success rate analytics
-- 🛠️ Automatically recovers from failures
+- 🛠️ Automatically recovers from failures and hanging processes
 - 📊 Maintains comprehensive logs for troubleshooting
 - ⚙️ Flexible configuration to meet your specific needs
 

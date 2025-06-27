@@ -15,7 +15,14 @@ NC='\033[0m' # No Color
 print_color() {
     local color=$1
     local message=$2
-    echo -e "${color}${message}${NC}"
+    # Only print color to terminal, not when redirected to a file
+    # Check if stdout is a terminal
+    if [ -t 1 ]; then
+        echo -e "${color}${message}${NC}" >&1
+    else
+        # If not a terminal, print without color codes
+        echo "$message" >&1
+    fi
 }
 
 # Function to check if the nexus-network command is installed
@@ -65,6 +72,8 @@ load_config() {
     RESTART_COOLDOWN=${RESTART_COOLDOWN:-300}
     ENABLE_NOTIFICATIONS=${ENABLE_NOTIFICATIONS:-true}
     LOG_RESTART_ACTIONS=${LOG_RESTART_ACTIONS:-true}
+    RATE_CALCULATION_MINUTES=${RATE_CALCULATION_MINUTES:-5}
+    INACTIVITY_THRESHOLD=${INACTIVITY_THRESHOLD:-300}
 }
 
 # Function to show usage
@@ -322,11 +331,11 @@ show_node_log() {
 # Function to show error/success rates for last 5 minutes
 show_rates() {
     local node_id=$1
-    local minutes=${2:-5}  # Default to 5 minutes if not specified
+    local minutes=${2:-$RATE_CALCULATION_MINUTES}  # Use configured value or default to 5
     
     print_color $BLUE "Error/Success Rates Analysis (Last $minutes minutes)"
     echo "================================================================="
-    printf "%-10s %-8s %-8s %-8s %-12s %-12s\n" "NODE_ID" "SUCCESS" "ERROR" "REFRESH" "SUCCESS%" "ERROR%"
+    printf "%-10s %-8s %-8s %-8s %-12s %-12s %-12s\n" "NODE_ID" "SUCCESS" "ERROR" "REFRESH" "SUCCESS%" "ERROR%" "LAST ENTRY"
     echo "-----------------------------------------------------------------"
     
     local total_success=0
@@ -342,53 +351,91 @@ show_rates() {
         local log_file="$LOG_DIR/nexus_node_${current_node}.log"
         
         if [ -f "$log_file" ]; then
-            # Use simpler approach - just count from recent log entries
-            local stats=$(tail -n 200 "$log_file" | awk '
-                {
-                    # Count first word of each line
-                    if (match($0, /^[A-Za-z]+/)) {
-                        first_word = substr($0, RSTART, RLENGTH)
-                        count[first_word]++
+            # Get the rates using our time-based function
+            local rate_info=$(get_node_success_rate "$current_node" "$minutes")
+            
+            # Parse the stats - now includes seconds_since_last
+            local success_rate=$(echo $rate_info | cut -d: -f1)
+            local total_entries=$(echo $rate_info | cut -d: -f2)
+            local seconds_since_last=$(echo $rate_info | cut -d: -f3)
+            
+            # Calculate counts based on rates and total
+            local success=0
+            local error=0
+            local refresh=0
+            
+            # Use a simplified approach to extract counts for display purposes
+            if [ -f "$log_file" ] && [ -s "$log_file" ]; then
+                # Grab recent log entries for display
+                local counts=$(tail -n 300 "$log_file" | awk '
+                    {
+                        if (match($0, /^[A-Za-z]+/)) {
+                            first_word = substr($0, RSTART, RLENGTH)
+                            count[first_word]++
+                        }
                     }
-                }
-                END {
-                    success = (count["Success"] ? count["Success"] : 0)
-                    error = (count["Error"] ? count["Error"] : 0)
-                    refresh = (count["Refresh"] ? count["Refresh"] : 0)
-                    total = success + error + refresh
-                    
-                    success_rate = (total > 0 ? (success * 100.0 / total) : 0)
-                    error_rate = (total > 0 ? (error * 100.0 / total) : 0)
-                    
-                    printf "%d %d %d %.1f %.1f", success, error, refresh, success_rate, error_rate
-                }')
+                    END {
+                        success = (count["Success"] ? count["Success"] : 0)
+                        error = (count["Error"] ? count["Error"] : 0)
+                        refresh = (count["Refresh"] ? count["Refresh"] : 0)
+                        printf "%d %d %d", success, error, refresh
+                    }')
+                
+                # Parse the counts
+                success=$(echo $counts | cut -d' ' -f1)
+                error=$(echo $counts | cut -d' ' -f2)
+                refresh=$(echo $counts | cut -d' ' -f3)
+            fi
             
-            # Parse the stats
-            local success=$(echo $stats | cut -d' ' -f1)
-            local error=$(echo $stats | cut -d' ' -f2)
-            local refresh=$(echo $stats | cut -d' ' -f3)
-            local success_rate=$(echo $stats | cut -d' ' -f4)
-            local error_rate=$(echo $stats | cut -d' ' -f5)
+            # Calculate error rate
+            local error_rate=0
+            local total_count=$((success + error + refresh))
+            if [ $total_count -gt 0 ]; then
+                error_rate=$(awk "BEGIN {printf \"%.1f\", $error * 100.0 / $total_count}")
+            fi
             
-            # Color coding based on error rate (using shell arithmetic)
-            error_int=$(printf "%.0f" "$error_rate")
+            # Format the "last entry" time
+            local last_entry_str="just now"
+            if [ "$seconds_since_last" -gt 0 ]; then
+                if [ "$seconds_since_last" -ge 3600 ]; then
+                    # Hours
+                    last_entry_str="$((seconds_since_last / 3600))h ago"
+                elif [ "$seconds_since_last" -ge 60 ]; then
+                    # Minutes
+                    last_entry_str="$((seconds_since_last / 60))m ago"
+                else
+                    # Seconds
+                    last_entry_str="${seconds_since_last}s ago"
+                fi
+            fi
+            
+            # Color coding based on last entry time
+            local time_color=$GREEN
+            if [ "$seconds_since_last" -gt "$INACTIVITY_THRESHOLD" ]; then
+                time_color=$RED
+            elif [ "$seconds_since_last" -gt $(($INACTIVITY_THRESHOLD / 2)) ]; then
+                time_color=$YELLOW
+            fi
+            
+            # Color coding based on error rate 
+            local color=$GREEN
+            local error_int=$(printf "%.0f" "$error_rate")
             if [ "$error_int" -gt 50 ]; then
                 color=$RED
             elif [ "$error_int" -gt 25 ]; then
                 color=$YELLOW
-            else
-                color=$GREEN
             fi
             
-            printf "%-10s %-8s %-8s %-8s " "$current_node" "$success" "$error" "$refresh"
-            printf "${color}%-12s %-12s${NC}\n" "${success_rate}%" "${error_rate}%"
+            printf "%-10s %-8d %-8d %-8d " "$current_node" "$success" "$error" "$refresh"
+            printf "${color}%-12s %-12s${NC}" "${success_rate}%" "${error_rate}%"
+            printf "${time_color}%-12s${NC}\n" "$last_entry_str"
             
             # Add to totals
             total_success=$((total_success + success))
             total_error=$((total_error + error))
             total_refresh=$((total_refresh + refresh))
         else
-            printf "%-10s %-8s %-8s %-8s %-12s %-12s\n" "$current_node" "N/A" "N/A" "N/A" "N/A" "N/A"
+            printf "%-10s %-8s %-8s %-8s %-12s %-12s %-12s\n" "$current_node" "N/A" "N/A" "N/A" "N/A" "N/A" "no log"
         fi
     done
     
@@ -404,11 +451,16 @@ show_rates() {
             overall_error_rate=$(awk "BEGIN {printf \"%.1f\", $total_error * 100.0 / $total_all}")
         fi
         
-        printf "%-10s %-8s %-8s %-8s " "TOTAL" "$total_success" "$total_error" "$total_refresh"
+        printf "%-10s %-8d %-8d %-8d " "TOTAL" "$total_success" "$total_error" "$total_refresh"
         printf "${BLUE}%-12s %-12s${NC}\n" "${overall_success_rate}%" "${overall_error_rate}%"
     fi
     
     echo "================================================================="
+    echo "Note: Success/Error rates are calculated over the last $minutes minutes."
+    echo "      Last entry shows how long since the most recent log entry."
+    if [ "$INACTIVITY_THRESHOLD" -gt 0 ]; then
+        echo "      Nodes with no activity for over $((INACTIVITY_THRESHOLD / 60)) minutes are highlighted in red."
+    fi
 }
 
 # Function to rotate log file if it's too large
@@ -544,19 +596,72 @@ show_all_status() {
 get_node_success_rate() {
     local node_id=$1
     local log_file="$LOG_DIR/nexus_node_${node_id}.log"
+    local minutes=${2:-5}  # Default to 5 minutes window
     
     if [ ! -f "$log_file" ]; then
-        echo "0:0"  # success_rate:total_entries
+        echo "0:0:0"  # success_rate:total_entries:seconds_since_last_entry
         return
     fi
     
-    local stats=$(tail -n $MIN_LOG_ENTRIES "$log_file" | awk '
+    # Get current timestamp
+    local current_time=$(date +%s)
+    
+    # Get the timestamp of the last log entry
+    local last_entry_time=0
+    if [ -f "$log_file" ] && [ -s "$log_file" ]; then
+        # Get last line with a timestamp (format: YYYY-MM-DD HH:MM:SS)
+        local last_line=$(tail -n 20 "$log_file" | grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1)
+        if [ -n "$last_line" ]; then
+            # Extract timestamp from line
+            local timestamp_str=$(echo "$last_line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}')
+            if [ -n "$timestamp_str" ]; then
+                last_entry_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$timestamp_str" "+%s" 2>/dev/null || echo 0)
+            fi
+        fi
+    fi
+    
+    # Calculate seconds since last log entry
+    local seconds_since_last=0
+    if [ $last_entry_time -gt 0 ]; then
+        seconds_since_last=$((current_time - last_entry_time))
+    fi
+    
+    # Convert minutes to seconds for time window
+    local time_window=$((minutes * 60))
+    
+    # Calculate the start time for our analysis window
+    local window_start_time=$((current_time - time_window))
+    
+    # Use awk to find entries in the time window and calculate success rate
+    local stats=$(awk -v window_start="$window_start_time" '
+        function parse_timestamp(ts_str) {
+            # Convert timestamp to epoch seconds
+            cmd = "date -j -f \"%Y-%m-%d %H:%M:%S\" \"" ts_str "\" \"+%s\" 2>/dev/null || echo 0"
+            cmd | getline ts
+            close(cmd)
+            return ts
+        }
+        
         {
             if (match($0, /^[A-Za-z]+/)) {
                 first_word = substr($0, RSTART, RLENGTH)
-                count[first_word]++
+                
+                # Look for timestamp in the line
+                if (match($0, /[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
+                    ts_str = substr($0, RSTART, RLENGTH)
+                    ts = parse_timestamp(ts_str)
+                    
+                    # Only count entries within our time window
+                    if (ts >= window_start) {
+                        count[first_word]++
+                    }
+                } else {
+                    # If no timestamp, assume recent and count it
+                    count[first_word]++
+                }
             }
         }
+        
         END {
             success = (count["Success"] ? count["Success"] : 0)
             error = (count["Error"] ? count["Error"] : 0)
@@ -564,8 +669,9 @@ get_node_success_rate() {
             total = success + error + refresh
             
             success_rate = (total > 0 ? (success * 100.0 / total) : 0)
-            printf "%.1f:%d", success_rate, total
-        }')
+            printf "%.1f:%d:%d", success_rate, total, '"$seconds_since_last"'
+        }
+    ' "$log_file")
     
     echo "$stats"
 }
@@ -577,10 +683,12 @@ log_restart_action() {
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     
     if [ "$LOG_RESTART_ACTIONS" = "true" ]; then
+        # Write to log file without any color codes or extra output
         echo "[$timestamp] RESTART: Node $node_id - $reason" >> "$RESTART_LOG_FILE"
     fi
     
     if [ "$ENABLE_NOTIFICATIONS" = "true" ]; then
+        # Only print to console, never to the log file
         print_color $YELLOW "[MONITOR] Restarting node $node_id: $reason"
     fi
 }
@@ -592,7 +700,23 @@ can_restart_node() {
     local cooldown_file="$RUN_DIR/.restart_cooldown_${node_id}"
     
     if [ -f "$cooldown_file" ]; then
+        # Check if file contains only a timestamp
+        if [[ $(wc -l < "$cooldown_file") -gt 1 || $(grep -c '[^0-9]' "$cooldown_file") -gt 0 ]]; then
+            # File is corrupted, recreate it
+            log_monitor_event "Cooldown file for node $node_id was corrupted, recreating it"
+            echo "$current_time" > "$cooldown_file"
+            return 0  # Allow restart if file was corrupted
+        fi
+        
         local last_restart=$(cat "$cooldown_file")
+        # Validate that last_restart is a valid number
+        if ! [[ "$last_restart" =~ ^[0-9]+$ ]]; then
+            # Not a valid timestamp, recreate the file
+            log_monitor_event "Invalid timestamp in cooldown file for node $node_id, recreating it"
+            echo "$current_time" > "$cooldown_file"
+            return 0  # Allow restart if timestamp was invalid
+        fi
+        
         local time_diff=$((current_time - last_restart))
         
         if [ $time_diff -lt $RESTART_COOLDOWN ]; then
@@ -600,6 +724,7 @@ can_restart_node() {
         fi
     fi
     
+    # Write only the timestamp to the cooldown file
     echo "$current_time" > "$cooldown_file"
     return 0  # Can restart
 }
@@ -608,9 +733,12 @@ can_restart_node() {
 log_monitor_event() {
     local message=$1
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    
+    # Write to log file without any color codes
     echo "[$timestamp] $message" >> "$MONITOR_LOG_FILE"
     
     if [ "$ENABLE_NOTIFICATIONS" = "true" ]; then
+        # Only print to console, never to the log file
         print_color $BLUE "[MONITOR] $message"
     fi
 }
@@ -674,6 +802,9 @@ remove_node_from_monitor() {
 monitor_nodes() {
     log_monitor_event "Monitor daemon started"
     
+    # Define our thresholds
+    local inactivity_threshold="$INACTIVITY_THRESHOLD"  # Use the config value
+    
     while true; do
         # Read the current list of monitored nodes
         if [ ! -f "$MONITORED_NODES_FILE" ]; then
@@ -702,7 +833,18 @@ monitor_nodes() {
                 if can_restart_node "$node_id"; then
                     log_monitor_event "Node $node_id is not running - attempting restart"
                     log_restart_action "$node_id" "Node not running"
-                    start_node "$node_id" >/dev/null 2>&1
+                    
+                    # Store that this node was being monitored
+                    local was_monitored=true
+                    
+                    # Pass false as second parameter to avoid recursive monitoring
+                    start_node "$node_id" false >/dev/null 2>&1
+                    
+                    # Re-add to monitoring list (it was removed by stop_node)
+                    if [ "$was_monitored" = true ]; then
+                        add_node_to_monitor "$node_id"
+                    fi
+                    
                     if is_node_running "$node_id"; then
                         log_monitor_event "Successfully restarted node $node_id"
                     else
@@ -714,12 +856,38 @@ monitor_nodes() {
                 continue
             fi
             
-            # Get success rate
-            local rate_info=$(get_node_success_rate "$node_id")
+            # Get success rate and time since last log entry (using configured time window)
+            local rate_info=$(get_node_success_rate "$node_id" "$RATE_CALCULATION_MINUTES")
             local success_rate=$(echo "$rate_info" | cut -d: -f1)
             local total_entries=$(echo "$rate_info" | cut -d: -f2)
+            local seconds_since_last=$(echo "$rate_info" | cut -d: -f3)
             
-            # Skip if not enough log entries
+            # Check if process is hanging (no log output for a long time)
+            if [ "$seconds_since_last" -gt "$inactivity_threshold" ]; then
+                if can_restart_node "$node_id"; then
+                    log_monitor_event "Node $node_id appears to be hanging - no log activity for ${seconds_since_last}s - attempting restart"
+                    log_restart_action "$node_id" "Hanging process (no log activity for ${seconds_since_last}s)"
+                    
+                    # Store that this node was being monitored
+                    local was_monitored=true
+                    
+                    stop_node "$node_id" >/dev/null 2>&1
+                    sleep 2
+                    start_node "$node_id" false >/dev/null 2>&1
+                    
+                    # Re-add to monitoring list (it was removed by stop_node)
+                    if [ "$was_monitored" = true ]; then
+                        add_node_to_monitor "$node_id"
+                    fi
+                    
+                    log_monitor_event "Restarted hanging node $node_id"
+                else
+                    log_monitor_event "Node $node_id appears to be hanging but still in cooldown period"
+                fi
+                continue
+            fi
+            
+            # Skip success rate check if not enough log entries
             if [ "$total_entries" -lt "$MIN_LOG_ENTRIES" ]; then
                 continue
             fi
@@ -730,7 +898,20 @@ monitor_nodes() {
                 if can_restart_node "$node_id"; then
                     log_monitor_event "Node $node_id has low success rate (${success_rate}%) - attempting restart"
                     log_restart_action "$node_id" "Low success rate: ${success_rate}% (threshold: ${SUCCESS_RATE_THRESHOLD}%)"
-                    restart_node "$node_id" >/dev/null 2>&1
+                    
+                    # Store that this node was being monitored
+                    local was_monitored=true
+                    
+                    # Use our custom restart function with auto_monitor=false to avoid recursion
+                    stop_node "$node_id" >/dev/null 2>&1
+                    sleep 2
+                    start_node "$node_id" false >/dev/null 2>&1
+                    
+                    # Re-add to monitoring list (it was removed by stop_node)
+                    if [ "$was_monitored" = true ]; then
+                        add_node_to_monitor "$node_id"
+                    fi
+                    
                     log_monitor_event "Restarted node $node_id due to low success rate"
                 else
                     log_monitor_event "Node $node_id has low success rate but still in cooldown period"
@@ -749,6 +930,8 @@ monitor_nodes() {
 
 # Function to start monitoring daemon
 start_monitor() {
+    local force_flag=$1
+    
     if [ "$MONITOR_ENABLED" != "true" ]; then
         print_color $YELLOW "Monitoring is disabled in configuration"
         return 1
@@ -766,6 +949,9 @@ start_monitor() {
     
     # Ensure run directory exists
     ensure_run_dir
+    
+    # Clean up any corrupted cooldown files before starting the monitor
+    cleanup_cooldown_files
     
     # Create or rotate monitor log file
     if [ -f "$MONITOR_LOG_FILE" ]; then
@@ -793,12 +979,20 @@ start_monitor() {
     if [ $nodes_count -eq 0 ]; then
         print_color $YELLOW "Warning: No running nodes found to monitor"
         print_color $BLUE "Start nodes first using '$0 start' before starting the monitor"
-        print_color $BLUE "Or use '$0 monitor --all' to monitor all nodes even if not running"
-        if [ "$2" != "--force" ]; then
+        print_color $BLUE "Or use '$0 monitor start --force' to monitor all nodes even if not running"
+        if [ "$force_flag" != "--force" ]; then
             print_color $YELLOW "Monitor not started. Use '$0 monitor start --force' to start anyway"
             return 1
         fi
         print_color $YELLOW "Starting monitor anyway with --force option"
+        
+        # If --force is specified and no nodes are running, add all configured nodes
+        # to the monitored list so they'll be started when they're needed
+        for node_id in "${NODE_IDS[@]}"; do
+            echo "$node_id" >> "$MONITORED_NODES_FILE"
+            running_nodes+=("$node_id")
+        done
+        nodes_count=${#NODE_IDS[@]}
     fi
     
     # Create a new log file with header
@@ -926,10 +1120,12 @@ show_monitor_status() {
 # Function to restart nodes
 restart_node() {
     local node_id=$1
+    local auto_monitor=${2:-true}  # Default to adding to monitor if it's running
+    
     print_color $BLUE "Restarting node $node_id..."
     stop_node "$node_id"
     sleep 2
-    start_node "$node_id"
+    start_node "$node_id" "$auto_monitor"
 }
 
 restart_all_nodes() {
@@ -939,8 +1135,56 @@ restart_all_nodes() {
     start_all_nodes
 }
 
+# Function to clean up corrupted cooldown files
+cleanup_cooldown_files() {
+    # Check if run directory exists
+    if [ ! -d "$RUN_DIR" ]; then
+        return
+    fi
+    
+    # Find all cooldown files
+    for cooldown_file in "$RUN_DIR/.restart_cooldown_"*; do
+        if [ -f "$cooldown_file" ]; then
+            # Check if file is corrupted (has non-digits or multiple lines)
+            if [[ $(wc -l < "$cooldown_file") -gt 1 || $(grep -c '[^0-9]' "$cooldown_file") -gt 0 ]]; then
+                local current_time=$(date +%s)
+                local node_id=$(basename "$cooldown_file" | sed 's/^.restart_cooldown_//')
+                
+                print_color $YELLOW "Found corrupted cooldown file for node $node_id, fixing it"
+                echo "$current_time" > "$cooldown_file"
+            fi
+        fi
+    done
+}
+
+# Function to clean up corrupted log files
+cleanup_log_files() {
+    # Check if the restart log file exists
+    if [ -f "$RESTART_LOG_FILE" ]; then
+        # Check if it contains color codes
+        if grep -q '\[0;' "$RESTART_LOG_FILE" 2>/dev/null; then
+            print_color $YELLOW "Found color codes in restart log file, cleaning it up"
+            
+            # Create a temporary file for the cleaned content
+            local temp_file="${RESTART_LOG_FILE}.tmp"
+            
+            # Filter out color codes and monitor messages
+            grep -v '^\[0;' "$RESTART_LOG_FILE" | sed 's/\x1B\[[0-9;]*[JKmsu]//g' > "$temp_file"
+            
+            # Replace the original file with the cleaned version
+            mv "$temp_file" "$RESTART_LOG_FILE"
+        fi
+    fi
+}
+
 # Load configuration before executing commands
 load_config
+
+# Run cleanup on cooldown files to ensure they're valid
+cleanup_cooldown_files
+
+# Clean up log files if needed
+cleanup_log_files
 
 # Main execution logic
 COMMAND=${1:-"help"}
@@ -1059,7 +1303,12 @@ case "$COMMAND" in
     "monitor")
         case "$NODE_ID" in
             "start")
-                start_monitor
+                # Check if --force flag is provided
+                if [ "$3" = "--force" ]; then
+                    start_monitor "--force"
+                else
+                    start_monitor
+                fi
                 ;;
             "stop")
                 stop_monitor
@@ -1077,6 +1326,7 @@ case "$COMMAND" in
                 fi
                 ;;
             "add")
+                NODE_ID=$3
                 if [ -n "$NODE_ID" ]; then
                     if [[ " ${NODE_IDS[@]} " =~ " ${NODE_ID} " ]]; then
                         add_node_to_monitor "$NODE_ID"
@@ -1091,6 +1341,7 @@ case "$COMMAND" in
                 fi
                 ;;
             "remove")
+                NODE_ID=$3
                 if [ -n "$NODE_ID" ]; then
                     if [[ " ${NODE_IDS[@]} " =~ " ${NODE_ID} " ]]; then
                         remove_node_from_monitor "$NODE_ID"
