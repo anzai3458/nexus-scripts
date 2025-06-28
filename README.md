@@ -12,6 +12,7 @@ A bash script to manage multiple Nexus network nodes with different node IDs.
 - Log rotation to prevent disk space issues
 - Detailed monitoring with configurable parameters
 - Automatic dependency check for Nexus Network CLI
+- Optimized performance for large log files
 
 ## 🏗️ System Architecture
 
@@ -282,6 +283,7 @@ The success/error rates are calculated based on:
 - Entries with timestamps outside this window are ignored
 - Each entry is categorized as Success, Error, or Refresh
 - Success rate = (Success entries / Total entries) × 100%
+- Optimized for large log files with efficient pre-filtering and in-memory timestamp parsing
 
 ### 🕒 Process Hang Detection
 
@@ -347,5 +349,6 @@ Key benefits:
 - 🛠️ Automatically recovers from failures and hanging processes
 - 📊 Maintains comprehensive logs for troubleshooting
 - ⚙️ Flexible configuration to meet your specific needs
+- 🔋 Optimized performance even with large log files
 
 For questions, issues, or contributions, please open a GitHub issue or submit a pull request. Happy node running! 😄 

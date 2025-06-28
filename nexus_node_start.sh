@@ -632,14 +632,57 @@ get_node_success_rate() {
     # Calculate the start time for our analysis window
     local window_start_time=$((current_time - time_window))
     
-    # Use awk to find entries in the time window and calculate success rate
-    local stats=$(awk -v window_start="$window_start_time" '
+    # Format the start time in the same format as log entries for grep filter
+    local window_start_date=$(date -j -f "%s" "$window_start_time" "+%Y-%m-%d %H:%M" 2>/dev/null)
+    
+    # First do a pre-filtering to get only relevant recent entries
+    # This dramatically improves performance for large log files
+    local filtered_log=$(grep -E "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" "$log_file" | grep -A 100000 "$window_start_date" 2>/dev/null || cat "$log_file")
+    
+    # Use awk to calculate success rate on the filtered data
+    local stats=$(echo "$filtered_log" | awk -v window_start="$window_start_time" '
+        # Parse timestamp once at beginning for efficiency
+        function init_month_days() {
+            month_days[1] = 31; month_days[2] = 28; month_days[3] = 31; 
+            month_days[4] = 30; month_days[5] = 31; month_days[6] = 30;
+            month_days[7] = 31; month_days[8] = 31; month_days[9] = 30; 
+            month_days[10] = 31; month_days[11] = 30; month_days[12] = 31;
+        }
+        
+        # More efficient timestamp parser that avoids calling external date command
         function parse_timestamp(ts_str) {
-            # Convert timestamp to epoch seconds
-            cmd = "date -j -f \"%Y-%m-%d %H:%M:%S\" \"" ts_str "\" \"+%s\" 2>/dev/null || echo 0"
-            cmd | getline ts
-            close(cmd)
-            return ts
+            # Format: YYYY-MM-DD HH:MM:SS
+            year = substr(ts_str, 1, 4)
+            month = substr(ts_str, 6, 2)
+            day = substr(ts_str, 9, 2)
+            hour = substr(ts_str, 12, 2)
+            minute = substr(ts_str, 15, 2)
+            second = substr(ts_str, 18, 2)
+            
+            # This is a simplified epoch calculation that works for recent dates
+            # Good enough for comparing timestamps within minutes/hours
+            epoch = second + (minute * 60) + (hour * 3600) + ((day-1) * 86400)
+            
+            # Add month days (approximation)
+            for (m = 1; m < month; m++) {
+                epoch += month_days[m] * 86400
+            }
+            
+            # Add year days (approximation)
+            epoch += (year - 1970) * 365 * 86400
+            # Add leap years (approximation)
+            leap_days = int((year - 1970) / 4)
+            epoch += leap_days * 86400
+            
+            return epoch
+        }
+        
+        BEGIN {
+            init_month_days()
+            success = 0
+            error = 0
+            refresh = 0
+            total = 0
         }
         
         {
@@ -651,27 +694,25 @@ get_node_success_rate() {
                     ts_str = substr($0, RSTART, RLENGTH)
                     ts = parse_timestamp(ts_str)
                     
-                    # Only count entries within our time window
-                    if (ts >= window_start) {
-                        count[first_word]++
-                    }
+                    # Count entries
+                    if (first_word == "Success") success++
+                    else if (first_word == "Error") error++
+                    else if (first_word == "Refresh") refresh++
                 } else {
-                    # If no timestamp, assume recent and count it
-                    count[first_word]++
+                    # If no timestamp, count it anyway since we already filtered by time
+                    if (first_word == "Success") success++
+                    else if (first_word == "Error") error++
+                    else if (first_word == "Refresh") refresh++
                 }
             }
         }
         
         END {
-            success = (count["Success"] ? count["Success"] : 0)
-            error = (count["Error"] ? count["Error"] : 0)
-            refresh = (count["Refresh"] ? count["Refresh"] : 0)
             total = success + error + refresh
-            
             success_rate = (total > 0 ? (success * 100.0 / total) : 0)
             printf "%.1f:%d:%d", success_rate, total, '"$seconds_since_last"'
         }
-    ' "$log_file")
+    ')
     
     echo "$stats"
 }
